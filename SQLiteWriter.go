@@ -70,7 +70,7 @@ func sqliteRowValues(l *models.FastlyLog) []interface{} {
 	}
 }
 
-func AsyncSQLiteWriter(filename *string, contentCh chan models.FastlyLog) chan error {
+func AsyncSQLiteWriter(filename *string, contentCh chan models.FastlyLog, commitEvery int) chan error {
 	errCh := make(chan error, 1)
 
 	fail := func(err error) {
@@ -80,6 +80,11 @@ func AsyncSQLiteWriter(filename *string, contentCh chan models.FastlyLog) chan e
 	}
 
 	go func() {
+		if commitEvery < 1 {
+			fail(fmt.Errorf("commitEvery must be at least 1, got %d", commitEvery))
+			return
+		}
+
 		db, err := sql.Open("sqlite3", *filename)
 		if err != nil {
 			fail(err)
@@ -93,19 +98,21 @@ func AsyncSQLiteWriter(filename *string, contentCh chan models.FastlyLog) chan e
 			return
 		}
 
-		// A single transaction is far faster than autocommitting each row
+		stmt, err := db.Prepare(insertStmt)
+		if err != nil {
+			fail(err)
+			return
+		}
+		defer stmt.Close()
+
+		// Batching rows into transactions is far faster than autocommitting each row
 		tx, err := db.Begin()
 		if err != nil {
 			fail(err)
 			return
 		}
-		stmt, err := tx.Prepare(insertStmt)
-		if err != nil {
-			tx.Rollback()
-			fail(err)
-			return
-		}
-		defer stmt.Close()
+		txStmt := tx.Stmt(stmt)
+		count := 0
 
 		for {
 			rec, haveMore := <-contentCh
@@ -119,10 +126,24 @@ func AsyncSQLiteWriter(filename *string, contentCh chan models.FastlyLog) chan e
 				return
 			}
 
-			if _, err = stmt.Exec(sqliteRowValues(&rec)...); err != nil {
+			if _, err = txStmt.Exec(sqliteRowValues(&rec)...); err != nil {
 				tx.Rollback()
 				fail(err)
 				return
+			}
+
+			count++
+			if count >= commitEvery {
+				if err = tx.Commit(); err != nil {
+					fail(err)
+					return
+				}
+				if tx, err = db.Begin(); err != nil {
+					fail(err)
+					return
+				}
+				txStmt = tx.Stmt(stmt)
+				count = 0
 			}
 		}
 	}()

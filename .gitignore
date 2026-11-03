@@ -1,3 +1,4 @@
 *.csv
 fastly-log-xtractor
 *.gz
+*.sqlite*

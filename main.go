@@ -15,6 +15,8 @@ func main() {
 	prefix := flag.String("prefix", "", "optional prefix to load")
 	output := flag.String("out", "fastly-logs.csv", "file to write outputs into")
 	parallel := flag.Int("loaders", 1, "number of parallel loaders to use")
+	format := flag.String("format", "csv", "output format (csv or sqlite)")
+	sqliteCommitEvery := flag.Int("sqlite-commit-every", 10000, "number of rows to commit per transaction when using sqlite")
 	flag.Parse()
 
 	cfg, err := config.LoadDefaultConfig(context.Background())
@@ -29,11 +31,23 @@ func main() {
 		log.Fatalf("Number of parallel loaders must be no more than %d (core count * 2)", runtime.NumCPU()*2)
 	}
 
+	if *sqliteCommitEvery < 1 {
+		log.Fatalf("sqlite-commit-every must not be less than 1")
+	}
+
 	s3Client := s3.NewFromConfig(cfg)
 
 	keysCh := IterateBucket(s3Client, bucketName, prefix)
 	logLinesCh := AsyncFileLoader(s3Client, bucketName, keysCh, *parallel)
-	errCh := AsyncWriter(output, logLinesCh)
+	var errCh chan error
+
+	if *format == "csv" {
+		errCh = AsyncWriter(output, logLinesCh)
+	} else if *format == "sqlite" {
+		errCh = AsyncSQLiteWriter(output, logLinesCh, *sqliteCommitEvery)
+	} else {
+		log.Fatalf("Unknown format %s.  Use either 'csv' or 'sqlite'", *format)
+	}
 
 	err, haveMore := <-errCh
 	if !haveMore {
