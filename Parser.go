@@ -2,11 +2,14 @@ package main
 
 import (
 	"bufio"
+	"compress/gzip"
 	"context"
 	"encoding/json"
+	"log"
+	"strings"
+
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/guardian/fastly-log-xtractor/models"
-	"log"
 )
 
 func ParseLine(content string) (*models.FastlyLog, error) {
@@ -32,7 +35,15 @@ func ParseFile(client *s3.Client, bucketName *string, key string, outputCh chan 
 	}
 	defer response.Body.Close()
 
-	scanner := bufio.NewScanner(response.Body)
+	reader := response.Body
+	if strings.HasSuffix(key, ".gz") {
+		reader, err = gzip.NewReader(response.Body)
+		if err != nil {
+			return err
+		}
+	}
+
+	scanner := bufio.NewScanner(reader)
 	c := 0
 	for scanner.Scan() {
 		c += 1
