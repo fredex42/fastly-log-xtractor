@@ -5,6 +5,7 @@ go 1.18
 require (
 	github.com/aws/aws-sdk-go-v2/config v1.18.26
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.34.0
+	github.com/mattn/go-sqlite3 v1.14.17
 )
 
 require (

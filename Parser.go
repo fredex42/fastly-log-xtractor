@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"log"
 	"strings"
+	"sync"
 
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/guardian/fastly-log-xtractor/models"
@@ -57,25 +58,34 @@ func ParseFile(client *s3.Client, bucketName *string, key string, outputCh chan 
 	return scanner.Err() //this will be nil if the scanner completed successfully
 }
 
-func AsyncFileLoader(client *s3.Client, bucketName *string, keysInput chan string) chan models.FastlyLog {
+func AsyncFileLoader(client *s3.Client, bucketName *string, keysInput chan string, parallel int) chan models.FastlyLog {
 	outputCh := make(chan models.FastlyLog, 100)
 
-	go func() {
-		for {
-			key, haveMore := <-keysInput
-			if !haveMore {
-				log.Printf("INFO Loaded all content")
-				close(outputCh)
-				return
-			}
+	wg := sync.WaitGroup{}
+	for i := 0; i < parallel; i++ {
+		wg.Add(1)
+		go func() {
+			for {
+				key, haveMore := <-keysInput
+				if !haveMore {
+					log.Printf("INFO Loaded all content")
+					wg.Done()
+					return
+				}
 
-			err := ParseFile(client, bucketName, key, outputCh)
-			if err != nil {
-				log.Printf("ERROR Could not read in s3://%s/%s", *bucketName, key)
-				close(outputCh)
-				return
+				err := ParseFile(client, bucketName, key, outputCh)
+				if err != nil {
+					log.Printf("ERROR Could not read in s3://%s/%s", *bucketName, key)
+					wg.Done()
+					return
+				}
 			}
-		}
+		}()
+	}
+
+	go func() {
+		wg.Wait()
+		close(outputCh)
 	}()
 
 	return outputCh
